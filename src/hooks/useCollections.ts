@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import browser from 'webextension-polyfill';
+import {collectionLabel} from '../apps/patreon/scan';
 
 export type BookmarkMedia = 'pictures' | 'video' | 'link';
 export type CollectedItem = {url: string; mediaType: BookmarkMedia};
@@ -16,6 +17,8 @@ export interface Bookmark {
 
 export interface CollectionMeta {
   type: 'bookmarks' | 'profile' | 'favorites' | 'liked' | 'reposts' | 'recommendation' | 'video' | 'playlist' | 'thread' | 'collection';
+  patreonCollectionId?: string;
+  customLabel?: boolean;
   handle: string; // collection name for bookmarks, username for profile
 }
 
@@ -60,7 +63,7 @@ export function useCollections() {
   }
 
     const addBookmarksToCollection = (platform: Platform, collectionName: string, items: (string | CollectedItem)[], meta?: CollectionMeta) => {
-        if (!items.length) {
+        if (!items.length && !meta?.patreonCollectionId) {
             return;
         }
         setCollectionStore(prevStore => {
@@ -80,7 +83,14 @@ export function useCollections() {
                     changed = true;
                 }
             }
-            if (!changed) {
+            const existingMeta = prevStore.meta?.[platform]?.[collectionName];
+            // The ID-only storage key survives title changes. A missing cover title
+            // must not erase a name already learned on a previous capture.
+            const keepLabel = meta?.patreonCollectionId && existingMeta && (existingMeta.customLabel || meta.handle === collectionName);
+            const savedMeta = keepLabel ? {...meta, handle: existingMeta.handle, customLabel: existingMeta.customLabel} : meta;
+            const metadataChanged = savedMeta?.patreonCollectionId && current.length > 0 &&
+                (existingMeta?.handle !== savedMeta.handle || existingMeta?.patreonCollectionId !== savedMeta.patreonCollectionId);
+            if (!changed && !metadataChanged) {
                 return prevStore;
             }
             const next = Array.from(bookmarks.values());
@@ -88,7 +98,7 @@ export function useCollections() {
                 ? {...platformMap, [collectionName]: next}
                 : {[collectionName]: next, ...platformMap};
             const collections = {...prevStore.collections, [platform]: updatedPlatform};
-            const nextMeta = meta ? {...prevStore.meta, [platform]: {...prevStore.meta?.[platform], [collectionName]: meta}} : prevStore.meta;
+            const nextMeta = savedMeta ? {...prevStore.meta, [platform]: {...prevStore.meta?.[platform], [collectionName]: savedMeta}} : prevStore.meta;
             const updatedStore = {collections, meta: nextMeta};
             saveCollections(updatedStore);
             return updatedStore;
@@ -150,11 +160,25 @@ export function useCollections() {
   };
 
   const renameCollection = (platform: string, oldCollectionName: string, newCollectionName: string) => {
-    if (oldCollectionName === newCollectionName) return;
-
     setCollectionStore(prevStore => {
       const updatedCollections = { ...prevStore.collections };
       const updatedMeta = { ...(prevStore.meta || {}) } as NonNullable<CollectionStore['meta']>;
+
+      const existing = updatedMeta[platform]?.[oldCollectionName];
+      if (platform === 'patreon' && existing?.patreonCollectionId) {
+          const handle = collectionLabel(existing.patreonCollectionId, newCollectionName);
+          if (existing.handle === handle) {
+              return prevStore;
+          }
+          updatedMeta[platform] = {...updatedMeta[platform], [oldCollectionName]: {...existing, handle, customLabel: true}};
+          const store = {...prevStore, meta: updatedMeta};
+          saveCollections(store);
+          return store;
+      }
+
+      if (oldCollectionName === newCollectionName) {
+          return prevStore;
+      }
 
       // Move bookmarks to new collection name (keep it at same relative position)
       if (updatedCollections[platform]?.[oldCollectionName]) {

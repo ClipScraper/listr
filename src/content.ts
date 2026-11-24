@@ -1,4 +1,5 @@
 import {initPatreonContent} from './apps/patreon/content';
+import {collectionCoverTitle} from './apps/patreon/scan';
 import browser from 'webextension-polyfill';
 import { initYouTubeContent } from './apps/youtube/content';
 import { initPinterestContent } from './apps/pinterest/content';
@@ -547,6 +548,9 @@ browser.runtime.onMessage.addListener(async (message: any, _sender: any) => {
       }
 
       switch (message?.action) {
+        case 'patreonCollectionTitle':
+            resolve(message.url === location.href ? collectionCoverTitle() : '');
+            break;
         case 'startScrolling':
           initScrollVars();
           startScrolling();

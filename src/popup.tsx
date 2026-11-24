@@ -5,10 +5,11 @@ import browser from 'webextension-polyfill';
 import { useActiveTab } from './hooks/useActiveTab';
 import { useScrolling } from './hooks/useScrolling';
 import { useSelectionMode } from './hooks/useSelectionMode';
-import { useCollections } from './hooks/useCollections';
+import {useCollections} from './hooks/useCollections';
+import type {CollectionMeta} from './hooks/useCollections';
 import './styles/popup.css';
 import {resolvePatreonAttachments} from './apps/patreon/attachments';
-import {isPatreonUrl, patreonCollectionName} from './apps/patreon/scan';
+import {isPatreonUrl, patreonCollectionName, patreonFilenameLabel} from './apps/patreon/scan';
 import {usePatreonCapture} from './apps/patreon/popup';
 import {
   extractInstagramCollectionName,
@@ -237,8 +238,9 @@ const Popup: React.FC = () => {
 
     const scrolling = useScrolling(onScrollCompleteCb);
     const {startScrolling, startInstagramScrolling, startYouTubeScrolling, cancelScrolling} = scrolling;
-    const patreon = usePatreonCapture(activeUrl, scrollWaitTime, (name, items) => {
-        addBookmarksToCollection('patreon', name, items, {type: 'collection', handle: name});
+    const savedPatreonLabel = isPatreonDomain ? getCollectionMeta('patreon', patreonCollectionName(activeUrl))?.handle : undefined;
+    const patreon = usePatreonCapture(activeUrl, scrollWaitTime, savedPatreonLabel, ({key, label, id}, items) => {
+        addBookmarksToCollection('patreon', key, items, {type: 'collection', handle: label, patreonCollectionId: id});
     });
     const scrollStatus = isPatreonDomain ? patreon.status : scrolling.scrollStatus;
     const timeRemaining = isPatreonDomain ? patreon.remaining : scrolling.timeRemaining;
@@ -651,11 +653,12 @@ const Popup: React.FC = () => {
 
   const startEditingCollection = (platform: string, collectionName: string) => {
     setEditingCollection({ platform, collectionName });
-    setEditingValue(collectionName);
+    const meta = getCollectionMeta(platform, collectionName);
+    setEditingValue(meta?.patreonCollectionId ? meta.handle : collectionName);
   };
 
   const saveCollectionEdit = () => {
-    if (editingCollection && editingValue.trim() && editingValue.trim() !== editingCollection.collectionName) {
+    if (editingCollection && editingValue.trim()) {
       renameCollection(editingCollection.platform, editingCollection.collectionName, editingValue.trim());
     }
     setEditingCollection(null);
@@ -841,15 +844,16 @@ const Popup: React.FC = () => {
     }
 
     const resolved = await resolvePatreonAttachments(bookmarks);
-    const meta = getCollectionMeta(platform, collectionName) || { type: 'profile', handle: collectionName } as any;
-    const fileLabel = platform === 'patreon' ? collectionName.replace(/[<>:"/\\|?*]/g, '_').slice(0, 140) : collectionName;
+    const meta: CollectionMeta = getCollectionMeta(platform, collectionName) || {type: 'profile', handle: collectionName};
+    const exportName = meta.patreonCollectionId ? meta.handle : collectionName;
+    const fileLabel = platform === 'patreon' ? patreonFilenameLabel(exportName, meta.patreonCollectionId) : collectionName;
     const filename = `${platform}.${fileLabel}.data.${downloadFormat}`;
     let blob: Blob;
 
     if (downloadFormat === 'json') {
       const jsonData = {
         platform,
-        collectionName,
+        collectionName: exportName,
         meta,
         items: bookmarks.map(bm => ({
           url: bm.url,
@@ -897,10 +901,10 @@ const Popup: React.FC = () => {
         const platformCollections = all[platform];
         for (const collectionName of Object.keys(platformCollections)) {
           const bookmarks = platformCollections[collectionName] || [];
-          const meta = getCollectionMeta(platform, collectionName) || { type: 'profile', handle: collectionName } as any;
+          const meta: CollectionMeta = getCollectionMeta(platform, collectionName) || {type: 'profile', handle: collectionName};
           allData.push({
             platform,
-            collectionName,
+            collectionName: meta.patreonCollectionId ? meta.handle : collectionName,
             meta,
             items: bookmarks.map(bm => ({
               url: bm.url,
@@ -922,7 +926,7 @@ const Popup: React.FC = () => {
         const platformCollections = all[platform];
         for (const collectionName of Object.keys(platformCollections)) {
           const bookmarks = platformCollections[collectionName] || [];
-          const meta = getCollectionMeta(platform, collectionName) || { type: 'profile', handle: collectionName } as any;
+          const meta: CollectionMeta = getCollectionMeta(platform, collectionName) || {type: 'profile', handle: collectionName};
           for (const bm of bookmarks) {
             const media = bm.mediaType ?? inferMediaType(platform, bm.url);
             rows.push([platform, String(meta.type), String(meta.handle), media, resolved.get(bm.url) ?? bm.url]);
@@ -981,7 +985,7 @@ const Popup: React.FC = () => {
           {(isPatreonDomain || isInstagramDomain || isTikTokDomain || isYouTubeDomain || isPinterestDomain || isTwitterDomain) && (
             <div id="popup-page-controls" className="instagram-controls-section">
               <h4 id="popup-page-title">
-                {isPatreonDomain ? patreonCollectionName(activeUrl)
+                {isPatreonDomain ? patreon.label
                   : isInstagramDomain ? igGetInstagramPageTitle(activeUrl)
                   : isTikTokDomain ? iGetTiktokPageTitle(activeUrl, tiktokSectionState)
                   : isYouTubeDomain ? youTubeTitle

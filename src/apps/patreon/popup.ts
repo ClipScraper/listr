@@ -1,11 +1,12 @@
 import type {CollectedItem} from '../../hooks/useCollections';
 import {useEffect, useRef, useState} from 'react';
 import browser from 'webextension-polyfill';
-import {patreonCollectionName} from './scan';
+import {collectionId, isPatreonUrl, listingCollectionId, patreonCollectionName} from './scan';
 import {ScrollStatus} from '../../hooks/useScrolling';
 
-type CaptureUpdate = {items?: CollectedItem[]; remaining?: number; complete?: boolean; count?: number; previewOnly?: boolean};
-type SaveItems = (name: string, items: CollectedItem[]) => void;
+type CaptureUpdate = {collectionTitle?: string; items?: CollectedItem[]; remaining?: number; complete?: boolean; count?: number; previewOnly?: boolean};
+type CaptureCollection = {key: string; label: string; id?: string};
+type SaveItems = (collection: CaptureCollection, items: CollectedItem[]) => void;
 
 type PatreonCapture = {
     start: () => Promise<void>;
@@ -13,14 +14,33 @@ type PatreonCapture = {
     toggle: () => void;
     status: ScrollStatus;
     remaining: number;
+    label: string;
     notice: string;
 };
 
-export function usePatreonCapture(url: string, wait: number, saveItems: SaveItems): PatreonCapture {
+export function usePatreonCapture(url: string, wait: number, savedLabel: string | undefined, saveItems: SaveItems): PatreonCapture {
     const connection = useRef<browser.Runtime.Port | null>(null);
     const [status, setStatus] = useState<ScrollStatus>('idle');
     const [remaining, setRemaining] = useState(0);
     const [notice, setNotice] = useState('');
+    const [coverTitle, setCoverTitle] = useState('');
+    const label = isPatreonUrl(url) ? (coverTitle ? patreonCollectionName(url, coverTitle) : savedLabel || patreonCollectionName(url)) : '';
+
+    useEffect(() => {
+        let active = true;
+        setCoverTitle('');
+        if (isPatreonUrl(url) && listingCollectionId(new URL(url))) {
+            browser.tabs.query({active: true, currentWindow: true}).then(async ([tab]) => {
+                if (tab?.id != null && tab.url === url) {
+                    const title = await browser.tabs.sendMessage(tab.id, {action: 'patreonCollectionTitle', url});
+                    if (active && typeof title === 'string' && title) {
+                        setCoverTitle(title);
+                    }
+                }
+            }).catch(() => {});
+        }
+        return () => { active = false; };
+    }, [url]);
 
     function cancel() {
         connection.current?.disconnect();
@@ -35,13 +55,17 @@ export function usePatreonCapture(url: string, wait: number, saveItems: SaveItem
         if (tab?.id == null || tab.url !== url || connection.current) {
             return;
         }
-        const name = patreonCollectionName(url);
+        const collection: CaptureCollection = {key: patreonCollectionName(url), label, id: collectionId(new URL(url)) ?? undefined};
         const port = browser.tabs.connect(tab.id, {name: 'patreon-collection'});
         connection.current = port;
         port.onMessage.addListener(raw => {
             const message = raw as CaptureUpdate;
-            if (message.items?.length) {
-                saveItems(name, message.items);
+            if (message.collectionTitle) {
+                setCoverTitle(message.collectionTitle);
+                collection.label = patreonCollectionName(url, message.collectionTitle);
+            }
+            if (message.items?.length || message.collectionTitle) {
+                saveItems(collection, message.items ?? []);
             }
             if (message.remaining !== undefined) {
                 setRemaining(message.remaining);
@@ -70,5 +94,5 @@ export function usePatreonCapture(url: string, wait: number, saveItems: SaveItem
         setStatus(pause ? 'paused' : 'scrolling');
     }
 
-    return {start, cancel, toggle, status, remaining, notice};
+    return {start, cancel, toggle, status, remaining, label, notice};
 }

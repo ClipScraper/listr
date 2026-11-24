@@ -9,7 +9,7 @@ export function isPatreonUrl(value: string): boolean {
     }
 }
 
-function collectionId(url: URL): string | null {
+export function collectionId(url: URL): string | null {
     return url.pathname.match(/\/collections?\/([^/]+)/)?.[1] || url.searchParams.get('collection_id') || url.searchParams.get('collection');
 }
 
@@ -19,11 +19,48 @@ export function listingCollectionId(url: URL): string | null {
     return postPath.test(url.pathname) ? null : collectionId(url);
 }
 
-export function patreonCollectionName(value: string): string {
+export function collectionLabel(id: string, title: string): string {
+    const clean = title.replace(/\s+/gu, ' ').trim();
+    if (!clean || clean === `Collection ${id}`) {
+        return `Collection ${id}`;
+    }
+    const suffix = ` (${id})`;
+    return clean.endsWith(suffix) ? clean : clean + suffix;
+}
+
+export function collectionCoverTitle(): string {
+    if (!listingCollectionId(new URL(location.href))) {
+        return '';
+    }
+    const cover = document.querySelector('h1 [elementtiming="Collection : Cover" i], h1 [elementtiming="Collection: Cover" i]');
+    const heading = Array.from(document.querySelectorAll('main h1, [role="main"] h1')).find(el =>
+        el.textContent?.trim() && !el.closest('nav, header, aside, article, [role="navigation"], a[href*="/posts/"], [data-tag="post-card"], [data-testid="post-card"], [data-tag="creator-sticky-nav"]')
+    );
+    const pageTitle = document.title.match(/^(.+?)\s+\|\s+Collection (?:from|by)\s+/i)?.[1];
+    return (cover?.textContent?.trim() || heading?.textContent?.trim() || pageTitle || '').replace(/\s+/gu, ' ').trim();
+}
+
+export function patreonFilenameLabel(label: string, id?: string): string {
+    const suffix = id && label.endsWith(` (${id})`) ? ` (${id})` : '';
+    const title = label.slice(0, label.length - suffix.length).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    const encoder = new TextEncoder();
+    let remaining = 140 - encoder.encode(suffix).length;
+    let prefix = '';
+    for (const char of title) {
+        remaining -= encoder.encode(char).length;
+        if (remaining < 0) {
+            break;
+        }
+        prefix += char;
+    }
+    return prefix + suffix;
+}
+
+export function patreonCollectionName(value: string, title = ''): string {
     const url = new URL(value);
     const collection = collectionId(url);
     if (collection) {
-        return `Collection ${collection}`;
+        return collectionLabel(collection, title);
     }
     return url.pathname.replace(/^\/c\//, '/').split('/').filter(Boolean).join(' - ') || 'Patreon feed';
 }
