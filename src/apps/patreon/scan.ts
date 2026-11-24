@@ -9,9 +9,19 @@ export function isPatreonUrl(value: string): boolean {
     }
 }
 
+function collectionId(url: URL): string | null {
+    return url.pathname.match(/\/collections?\/([^/]+)/)?.[1] || url.searchParams.get('collection_id') || url.searchParams.get('collection');
+}
+
+const postPath = /\/posts\/(?:[^/]+-)?(\d+)\/?$/;
+
+export function listingCollectionId(url: URL): string | null {
+    return postPath.test(url.pathname) ? null : collectionId(url);
+}
+
 export function patreonCollectionName(value: string): string {
     const url = new URL(value);
-    const collection = url.pathname.match(/\/collections?\/([^/]+)/)?.[1] || url.searchParams.get('collection_id') || url.searchParams.get('collection');
+    const collection = collectionId(url);
     if (collection) {
         return `Collection ${collection}`;
     }
@@ -92,7 +102,7 @@ function scrollContainer(content: Element | null): Element {
 }
 
 export function nextPostsButton(scrollTarget: Element, atBottom: boolean): HTMLButtonElement | undefined {
-    const collection = /\/collections?\//.test(location.pathname) || new URLSearchParams(location.search).has('collection_id');
+    const collection = listingCollectionId(new URL(location.href));
     const feed = document.querySelector('[data-tag="cw-post-stream-container"]') || (collection && document.querySelector('main, [role="main"]'));
     if (!feed) {
         return;
@@ -124,7 +134,6 @@ export function scanPatreonPosts(): PatreonScan {
 
     const main = document.querySelector('main, [role="main"]');
     const roots = new Set(Array.from(document.querySelectorAll(`${cards}, ${bodies}`)).filter(root => !root.closest(outsidePosts)));
-    const postPath = /\/posts\/(?:[^/]+-)?(\d+)\/?$/;
     const current = location.pathname.match(postPath)?.[1];
     const postIds = new Set<string>();
     if (current) {
@@ -156,6 +165,19 @@ export function scanPatreonPosts(): PatreonScan {
                 roots.add(anchor.closest('li, [role="listitem"]') || anchor);
             }
         });
+    }
+
+    const firstPost = Array.from(roots).find(root => root.getClientRects().length);
+    const scrollTarget = scrollContainer(firstPost || main);
+    const page = new URL(location.href);
+    const collection = listingCollectionId(page);
+    if (collection) {
+        const items = Array.from(postIds, id => {
+            const post = new URL(`/posts/${id}`, page.origin);
+            post.searchParams.set('collection', collection);
+            return {url: post.href, mediaType: 'link' as const};
+        });
+        return {items, postIds, scrollTarget};
     }
 
     for (const root of roots) {
@@ -196,8 +218,6 @@ export function scanPatreonPosts(): PatreonScan {
             }
         }
     }
-    const firstPost = Array.from(roots).find(root => root.getClientRects().length);
-    const scrollTarget = scrollContainer(firstPost || main);
     const items = Array.from(found, ([url, mediaType]) => ({url, mediaType}));
     return {items, postIds, scrollTarget};
 }

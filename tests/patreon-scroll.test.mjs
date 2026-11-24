@@ -94,3 +94,46 @@ for (const nested of [false, true]) {
         }
     });
 }
+
+test('collection grid exports one full-post job per card and excludes comments and teasers', async () => {
+    const context = await chromium.launchPersistentContext('', {
+        channel: 'chromium', executablePath: process.env.CHROMIUM_PATH, headless: true,
+        ignoreDefaultArgs: ['--disable-extensions'],
+        args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+    });
+    try {
+        const page = context.pages()[0];
+        await page.goto('chrome://extensions');
+        const id = await page.evaluate(async () => (await chrome.developerPrivate.getExtensionsInfo()).find(info => info.name === 'listr').id);
+        const collection = 'https://www.patreon.com/collection/77';
+        const posts = ['101', '102'];
+        const cards = posts.map(id => `<a href="/posts/${id}?collection=77"><picture><img src="data:," data-src="/preview/${id}.gif"></picture><div data-tag="teaser-post-content">See https://example.org/teaser</div></a>`).join('');
+        await context.route(collection, route => route.fulfill({contentType: 'text/html', body: `<main><div data-cardlayout-edgeless="true">${cards}</div><a href="/posts/titled-101">Duplicate</a><div data-tag="comments"><a href="/posts/999">Comment</a></div></main>`}));
+        await page.goto(collection);
+        const popup = await context.newPage();
+        await popup.addInitScript(() => {
+            if (globalThis.chrome?.downloads) {
+                chrome.downloads.download = ({url}, callback) => {
+                    fetch(url).then(response => response.text()).then(csv => {
+                        window.exportedCsv = csv;
+                        callback(1);
+                    });
+                };
+            }
+        });
+        await page.bringToFront();
+        await popup.goto(`chrome-extension://${id}/popup.html`);
+        await popup.locator('#popup-collect-patreon').click();
+        await popup.waitForFunction(() => document.querySelector('[id$="-count"]')?.textContent === '2');
+        const saved = await popup.evaluate(async () => (await chrome.storage.local.get('allCollections')).allCollections.collections.patreon['Collection 77']);
+        const urls = posts.map(id => `https://www.patreon.com/posts/${id}?collection=77`);
+        assert.deepEqual(saved.map(item => [item.url, item.mediaType]), urls.map(url => [url, 'link']));
+        await popup.locator('#popup-export-all').click();
+        await popup.waitForFunction(() => window.exportedCsv);
+        assert.deepEqual((await popup.evaluate(() => window.exportedCsv)).split('\n'), [
+            'Platform,Type,Handle,Media,link', ...urls.map(url => `patreon,collection,Collection 77,link,${url}`),
+        ]);
+    } finally {
+        await context.close();
+    }
+});

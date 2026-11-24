@@ -1,6 +1,6 @@
 import type {CollectedItem, BookmarkMedia} from '../../hooks/useCollections';
 import browser from 'webextension-polyfill';
-import {isPatreonUrl, nextPostsButton, scanPatreonPosts} from './scan';
+import {listingCollectionId, isPatreonUrl, nextPostsButton, scanPatreonPosts} from './scan';
 import {PostRateLimitError, readPost} from './post';
 
 // The port ties the capture to the requesting popup and tab, including pause and cancellation.
@@ -14,6 +14,7 @@ export function initPatreonContent() {
         if (port.name !== 'patreon-collection') {
             return;
         }
+        const collection = listingCollectionId(new URL(location.href));
         const page = location.pathname + location.search;
         const seen = new Map<string, BookmarkMedia>();
         let timer: number | undefined;
@@ -84,7 +85,7 @@ export function initPatreonContent() {
                 if (!visited.has(id)) {
                     visited.add(id);
                     bottomSince = 0;
-                    if (!rateLimited) {
+                    if (!collection && !rateLimited) {
                         pending.add(id);
                     }
                 }

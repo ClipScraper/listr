@@ -4,6 +4,8 @@
 
 Open a Patreon post, creator feed, or collection and click **Collect Patreon images, videos, and links** in the popup. Keep the popup open while it scrolls. You can pause or stop at any time. Listr saves items as it finds them and reads available post details for galleries and attachments.
 
+On a Patreon collection listing, each card contributes one post URL. ClipDownloader opens the full post when you queue it. The count on this page is the number of distinct posts, and the grid’s teaser images are omitted.
+
 Export a saved collection as CSV to import it into ClipDownloader. CSV and JSON exports preserve each item’s media type (`pictures`, `video`, or `link`). Some media URLs expire and may require a fresh capture.
 
 ## Develop / Build
