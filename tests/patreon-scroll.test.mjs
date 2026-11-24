@@ -108,7 +108,7 @@ test('collection grid exports one full-post job per card and excludes comments a
         const collection = 'https://www.patreon.com/collection/77';
         const posts = ['101', '102'];
         const cards = posts.map(id => `<a href="/posts/${id}?collection=77"><picture><img src="data:," data-src="/preview/${id}.gif"></picture><div data-tag="teaser-post-content">See https://example.org/teaser</div></a>`).join('');
-        await context.route(collection, route => route.fulfill({contentType: 'text/html', body: `<main style="min-height: 1500vh"><nav><h1>Creator name</h1></nav><h1><div elementtiming="Collection : Cover" data-is-key-element="true">  Cop   Girl  </div></h1><div data-cardlayout-edgeless="true">${cards}</div><a href="/posts/titled-101">Duplicate</a><div data-tag="comments"><a href="/posts/999">Comment</a></div></main>`}));
+        await context.route(collection, route => route.fulfill({contentType: 'text/html', body: `<main style="min-height: 1500vh"><nav><h1>Viewer navigation</h1></nav><div class="test_premiumCollectionsTitleWrapper"><div><a href="/cw/Jazzon"> Jazzon </a></div><div><h1><div elementtiming="Collection : Cover" data-is-key-element="true">  Cop   Girl  </div></h1></div></div><div data-cardlayout-edgeless="true">${cards}</div><a href="/posts/titled-101">Duplicate</a><div data-tag="comments"><a href="/posts/999">Comment</a></div></main>`}));
         await page.goto(collection);
         const popup = await context.newPage();
         await popup.addInitScript(() => {
@@ -137,13 +137,14 @@ test('collection grid exports one full-post job per card and excludes comments a
         const saved = await popup.evaluate(async () => (await chrome.storage.local.get('allCollections')).allCollections.collections.patreon['Collection 77']);
         const urls = posts.map(id => `https://www.patreon.com/posts/${id}?collection=77`);
         assert.deepEqual(saved.map(item => [item.url, item.mediaType]), urls.map(url => [url, 'link']));
+        assert.equal(await popup.locator('tbody [id$="-creator"]').textContent(), 'Jazzon');
         assert.equal(saved[0].uuid, 'previous-card');
         assert.equal(await popup.locator('tbody tr').count(), 1);
         assert.equal(await popup.locator('tbody [id$="-name"]').textContent(), 'Cop Girl (77)');
         await popup.locator('#popup-export-all').click();
         await popup.waitForFunction(() => window.exportedCsv);
         assert.deepEqual((await popup.evaluate(() => window.exportedCsv)).split('\n'), [
-            'Platform,Type,Handle,Media,link', ...urls.map(url => `patreon,collection,Cop Girl (77),link,${url}`),
+            'Platform,Type,Handle,Media,link,Creator', ...urls.map(url => `patreon,collection,Cop Girl (77),link,${url},Jazzon`),
         ]);
         await popup.locator('button[id$="-export"]').click();
         await popup.waitForFunction(() => window.exportFilename === 'patreon.Cop Girl (77).data.csv');
@@ -159,17 +160,19 @@ test('collection grid exports one full-post job per card and excludes comments a
         const exported = JSON.parse(await popup.evaluate(() => window.exportedCsv));
         assert.equal(exported.collectionName, 'Updated / Title (77)');
         assert.equal(exported.meta.handle, exported.collectionName);
+        assert.equal(exported.meta.creator, 'Jazzon');
         await popup.locator('#popup-export-all').click();
         await popup.waitForFunction(() => window.exportFilename === 'all-collections.data.json');
         assert.equal(JSON.parse(await popup.evaluate(() => window.exportedCsv))[0].collectionName, exported.collectionName);
         await popup.locator('#popup-stop-capture').click();
+        await page.locator('[class*="premiumCollectionsTitleWrapper"] > div').first().evaluate(el => { el.textContent = ''; });
         await page.locator('h1 [elementtiming]').evaluate(el => el.remove());
         await popup.reload();
         await popup.waitForFunction(() => document.getElementById('popup-page-title')?.textContent === 'Updated / Title (77)');
         await popup.locator('#popup-collect-patreon').click();
         assert.equal(await popup.locator('tbody [id$="-name"]').textContent(), 'Updated / Title (77)');
         const longTitle = '作品 / ' + '猫'.repeat(100);
-        await page.locator('main > h1').evaluate((el, title) => { el.textContent = title; }, longTitle);
+        await page.locator('main h1').last().evaluate((el, title) => { el.textContent = title; }, longTitle);
         await popup.waitForFunction(title => document.querySelector('tbody [id$="-name"]')?.textContent === `${title} (77)`, longTitle);
         await popup.locator('button[id$="-export"]').click();
         await popup.waitForFunction(() => window.exportFilename?.startsWith('patreon.作品'));
@@ -177,6 +180,10 @@ test('collection grid exports one full-post job per card and excludes comments a
         assert.ok(longExport.filename.endsWith(' (77).data.json'));
         assert.ok(Buffer.byteLength(longExport.filename) < 255);
         assert.equal(longExport.data.collectionName, `${longTitle} (77)`);
+        assert.equal(longExport.data.meta.creator, 'Jazzon');
+        await page.locator('[class*="premiumCollectionsTitleWrapper"] > div').first().evaluate(el => { el.textContent = 'Jazzon Studio'; });
+        await popup.waitForFunction(() => document.querySelector('tbody [id$="-creator"]')?.textContent === 'Jazzon Studio');
+        assert.equal(await popup.locator('tbody [id$="-count"]').textContent(), '2');
         const idProblems = await popup.evaluate(() => Array.from(document.querySelectorAll('*')).filter(el => el instanceof HTMLElement &&
             (!el.id || document.querySelectorAll('#' + CSS.escape(el.id)).length !== 1)).map(el => el.tagName));
         assert.deepEqual(idProblems, []);

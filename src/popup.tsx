@@ -239,8 +239,8 @@ const Popup: React.FC = () => {
     const scrolling = useScrolling(onScrollCompleteCb);
     const {startScrolling, startInstagramScrolling, startYouTubeScrolling, cancelScrolling} = scrolling;
     const savedPatreonLabel = isPatreonDomain ? getCollectionMeta('patreon', patreonCollectionName(activeUrl))?.handle : undefined;
-    const patreon = usePatreonCapture(activeUrl, scrollWaitTime, savedPatreonLabel, ({key, label, id}, items) => {
-        addBookmarksToCollection('patreon', key, items, {type: 'collection', handle: label, patreonCollectionId: id});
+    const patreon = usePatreonCapture(activeUrl, scrollWaitTime, savedPatreonLabel, ({key, label, id, creator}, items) => {
+        addBookmarksToCollection('patreon', key, items, {type: 'collection', handle: label, patreonCollectionId: id, creator});
     });
     const scrollStatus = isPatreonDomain ? patreon.status : scrolling.scrollStatus;
     const timeRemaining = isPatreonDomain ? patreon.remaining : scrolling.timeRemaining;
@@ -864,9 +864,16 @@ const Popup: React.FC = () => {
       blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json;charset=utf-8;" });
     } else {
       const header = ["Platform", "Type", "Handle", "Media", "link"];
+      if (meta.creator) {
+          header.push('Creator');
+      }
       const rows = bookmarks.map(bm => {
         const media = bm.mediaType ?? inferMediaType(platform, bm.url);
-        return [platform, meta.type, meta.handle, media, resolved.get(bm.url) ?? bm.url];
+        const row = [platform, meta.type, meta.handle, media, resolved.get(bm.url) ?? bm.url];
+        if (meta.creator) {
+            row.push(meta.creator);
+        }
+        return row;
       });
       const csvContent = [header, ...rows]
         .map(row => row.map(col => escapeCsv(String(col))).join(","))
@@ -921,6 +928,10 @@ const Popup: React.FC = () => {
       blob = new Blob([JSON.stringify(allData, null, 2)], { type: "application/json;charset=utf-8;" });
     } else {
       const header = ["Platform", "Type", "Handle", "Media", "link"];
+      const includeCreator = Object.keys(all.patreon || {}).some(key => getCollectionMeta('patreon', key)?.creator);
+      if (includeCreator) {
+          header.push('Creator');
+      }
       const rows: string[][] = [];
       for (const platform of platforms) {
         const platformCollections = all[platform];
@@ -929,7 +940,11 @@ const Popup: React.FC = () => {
           const meta: CollectionMeta = getCollectionMeta(platform, collectionName) || {type: 'profile', handle: collectionName};
           for (const bm of bookmarks) {
             const media = bm.mediaType ?? inferMediaType(platform, bm.url);
-            rows.push([platform, String(meta.type), String(meta.handle), media, resolved.get(bm.url) ?? bm.url]);
+            const row = [platform, meta.type, meta.handle, media, resolved.get(bm.url) ?? bm.url];
+            if (includeCreator) {
+                row.push(meta.creator || '');
+            }
+            rows.push(row);
           }
         }
       }
@@ -1126,6 +1141,7 @@ const Popup: React.FC = () => {
                           </td>
                           <td id={`${rowId}-type`}>{getCollectionMeta(platform, colName)?.type || 'profile'}</td>
                           <td id={`${rowId}-handle`}>
+                            {getCollectionMeta(platform, colName)?.creator && <span id={`${rowId}-creator`} className="collection-creator">{getCollectionMeta(platform, colName)?.creator}</span>}
                             {editingCollection?.platform === platform && editingCollection?.collectionName === colName ? (
                               <input id={`${rowId}-rename`} type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={handleEditKeyPress} onBlur={saveCollectionEdit} className="collection-edit-input" autoFocus style={{width: '100%', fontSize: '0.85rem'}} />
                             ) : (

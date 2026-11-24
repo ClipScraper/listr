@@ -18,6 +18,7 @@ export interface Bookmark {
 export interface CollectionMeta {
   type: 'bookmarks' | 'profile' | 'favorites' | 'liked' | 'reposts' | 'recommendation' | 'video' | 'playlist' | 'thread' | 'collection';
   patreonCollectionId?: string;
+  creator?: string;
   customLabel?: boolean;
   handle: string; // collection name for bookmarks, username for profile
 }
@@ -87,9 +88,14 @@ export function useCollections() {
             // The ID-only storage key survives title changes. A missing cover title
             // must not erase a name already learned on a previous capture.
             const keepLabel = meta?.patreonCollectionId && existingMeta && (existingMeta.customLabel || meta.handle === collectionName);
-            const savedMeta = keepLabel ? {...meta, handle: existingMeta.handle, customLabel: existingMeta.customLabel} : meta;
+            const savedMeta = meta?.patreonCollectionId ? {
+                ...meta,
+                creator: meta.creator || existingMeta?.creator,
+                handle: keepLabel ? existingMeta.handle : meta.handle,
+                customLabel: existingMeta?.customLabel,
+            } : meta;
             const metadataChanged = savedMeta?.patreonCollectionId && current.length > 0 &&
-                (existingMeta?.handle !== savedMeta.handle || existingMeta?.patreonCollectionId !== savedMeta.patreonCollectionId);
+                (existingMeta?.handle !== savedMeta.handle || existingMeta?.creator !== savedMeta.creator || existingMeta?.patreonCollectionId !== savedMeta.patreonCollectionId);
             if (!changed && !metadataChanged) {
                 return prevStore;
             }

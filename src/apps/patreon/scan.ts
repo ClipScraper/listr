@@ -40,6 +40,33 @@ export function collectionCoverTitle(): string {
     return (cover?.textContent?.trim() || heading?.textContent?.trim() || pageTitle || '').replace(/\s+/gu, ' ').trim();
 }
 
+export function collectionCoverCreator(): string {
+    if (!listingCollectionId(new URL(location.href))) {
+        return '';
+    }
+    const wrapper = document.querySelector('main [class*="premiumCollectionsTitleWrapper"], [role="main"] [class*="premiumCollectionsTitleWrapper"]');
+    const heading = wrapper?.querySelector('h1');
+    const titleStack = Array.from(wrapper?.children || []).find(child => heading && child.contains(heading));
+    const byline = titleStack?.previousElementSibling;
+    const creatorInfo = document.querySelectorAll('[data-tag="creator-info-desktop"], [data-tag="creator-info-mobile"]');
+    for (const area of [byline, ...Array.from(creatorInfo)]) {
+        for (const anchor of Array.from(area?.querySelectorAll<HTMLAnchorElement>('a[href]') || [])) {
+            const url = networkUrl(anchor.getAttribute('href'));
+            if (!url || !isPatreonUrl(url.href) || !/^\/(?:c(?:w)?\/)?[^/]+\/?$/.test(url.pathname) || /^\/(?:posts|collections?|home|login|join)\/?$/.test(url.pathname)) {
+                continue;
+            }
+            const name = anchor.textContent?.replace(/\s+/gu, ' ').trim();
+            if (name) {
+                return name;
+            }
+        }
+    }
+    // The cover can render the avatar and byline as plain text directly above the title.
+    const coverName = byline && !byline.querySelector('button, nav') ? byline.textContent?.trim() : '';
+    const pageCreator = document.title.match(/\s+\|\s+Collection (?:from|by) (.+?)\s+\|/i)?.[1];
+    return (coverName || pageCreator || '').replace(/\s+/gu, ' ').trim();
+}
+
 export function patreonFilenameLabel(label: string, id?: string): string {
     const suffix = id && label.endsWith(` (${id})`) ? ` (${id})` : '';
     const title = label.slice(0, label.length - suffix.length).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');

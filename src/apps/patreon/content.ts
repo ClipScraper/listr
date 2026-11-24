@@ -1,6 +1,6 @@
 import type {CollectedItem, BookmarkMedia} from '../../hooks/useCollections';
 import browser from 'webextension-polyfill';
-import {collectionCoverTitle, listingCollectionId, isPatreonUrl, nextPostsButton, scanPatreonPosts} from './scan';
+import {collectionCoverCreator, collectionCoverTitle, listingCollectionId, isPatreonUrl, nextPostsButton, scanPatreonPosts} from './scan';
 import {PostRateLimitError, readPost} from './post';
 
 // The port ties the capture to the requesting popup and tab, including pause and cancellation.
@@ -23,6 +23,7 @@ export function initPatreonContent() {
         let bottomSince = 0;
         let pagedAtCount = -1;
         let lastTitle = '';
+        let lastCreator = '';
 
         const visited = new Set<string>();
         const pending = new Set<string>();
@@ -83,9 +84,11 @@ export function initPatreonContent() {
             const {items, postIds, scrollTarget} = scanPatreonPosts();
             if (collection) {
                 const title = collectionCoverTitle();
-                if (title && title !== lastTitle) {
-                    lastTitle = title;
-                    port.postMessage({collectionTitle: title});
+                const creator = collectionCoverCreator();
+                if ((title && title !== lastTitle) || (creator && creator !== lastCreator)) {
+                    lastTitle = title || lastTitle;
+                    lastCreator = creator || lastCreator;
+                    port.postMessage({collectionTitle: lastTitle, collectionCreator: lastCreator});
                 }
             }
             publish(items);

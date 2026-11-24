@@ -4,8 +4,8 @@ import browser from 'webextension-polyfill';
 import {collectionId, isPatreonUrl, listingCollectionId, patreonCollectionName} from './scan';
 import {ScrollStatus} from '../../hooks/useScrolling';
 
-type CaptureUpdate = {collectionTitle?: string; items?: CollectedItem[]; remaining?: number; complete?: boolean; count?: number; previewOnly?: boolean};
-type CaptureCollection = {key: string; label: string; id?: string};
+type CaptureUpdate = {collectionTitle?: string; collectionCreator?: string; items?: CollectedItem[]; remaining?: number; complete?: boolean; count?: number; previewOnly?: boolean};
+type CaptureCollection = {key: string; label: string; id?: string; creator?: string};
 type SaveItems = (collection: CaptureCollection, items: CollectedItem[]) => void;
 
 type PatreonCapture = {
@@ -64,7 +64,10 @@ export function usePatreonCapture(url: string, wait: number, savedLabel: string 
                 setCoverTitle(message.collectionTitle);
                 collection.label = patreonCollectionName(url, message.collectionTitle);
             }
-            if (message.items?.length || message.collectionTitle) {
+            if (message.collectionCreator) {
+                collection.creator = message.collectionCreator;
+            }
+            if (message.items?.length || message.collectionTitle || message.collectionCreator) {
                 saveItems(collection, message.items ?? []);
             }
             if (message.remaining !== undefined) {
