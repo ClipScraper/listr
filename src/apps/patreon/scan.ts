@@ -49,9 +49,10 @@ export function linkedMedia(url: URL, filename = ''): BookmarkMedia {
     return 'link';
 }
 
-const cards = 'article, [data-tag="post-card"], [data-testid="post-card"], [data-tag="post"]';
+const cards = 'article, [role="article"], [data-post-id], [data-tag="post-card"], [data-testid="post-card"], [data-tag="post"]';
 const bodies = '[data-tag^="post-content"], [data-testid="post-content"], [data-tag="post-body"], [data-tag="post-attachments"]';
-const chrome = 'nav, aside, header, footer, [role="navigation"], [data-tag*="comment" i], [data-testid*="comment" i], [data-tag*="avatar" i], [data-tag*="post-header" i], [data-tag*="post-footer" i], [data-tag*="recommend" i]';
+const outsidePosts = 'nav, aside, footer, [role="navigation"], [role="complementary"], [data-tag^="sticky-sidebar-section-"], [role="banner"], [data-tag*="comment" i], [data-testid*="comment" i], [data-tag*="avatar" i], [data-tag*="post-footer" i], [data-tag*="recommend" i]';
+const chrome = `${outsidePosts}, header, [data-tag*="post-header" i]`;
 const permalink = 'a[href*="/posts/"]';
 
 export function textLinks(root: Node): CollectedItem[] {
@@ -75,30 +76,45 @@ export function textLinks(root: Node): CollectedItem[] {
     return items;
 }
 
-export function visiblePostIds(): Set<string> {
-    const ids = new Set<string>();
-    const current = location.pathname.match(/\/posts\/(?:[^/]+-)?(\d+)\/?$/)?.[1];
-    if (current) {
-        return new Set([current]);
-    }
-    const candidates: string[] = [];
-    document.querySelectorAll<HTMLAnchorElement>(permalink).forEach(anchor => {
-        if (!anchor.closest(chrome) && !anchor.closest(bodies)) {
-            candidates.push(anchor.href);
-        }
-    });
-    for (const candidate of candidates) {
-        if (isPatreonUrl(candidate)) {
-            const id = new URL(candidate).pathname.match(/\/posts\/(?:[^/]+-)?(\d+)\/?$/)?.[1];
-            if (id) {
-                ids.add(id);
-            }
+type PatreonScan = {
+    items: CollectedItem[];
+    postIds: Set<string>;
+    scrollTarget: Element;
+};
+
+function scrollContainer(content: Element | null): Element {
+    for (let el = content; el; el = el.parentElement) {
+        if (el.clientHeight && el.scrollHeight > el.clientHeight && /^(auto|scroll|overlay)$/.test(getComputedStyle(el).overflowY)) {
+            return el;
         }
     }
-    return ids;
+    return document.scrollingElement || document.documentElement;
 }
 
-export function scanPatreonPosts(): CollectedItem[] {
+export function nextPostsButton(scrollTarget: Element, atBottom: boolean): HTMLButtonElement | undefined {
+    const collection = /\/collections?\//.test(location.pathname) || new URLSearchParams(location.search).has('collection_id');
+    const feed = document.querySelector('[data-tag="cw-post-stream-container"]') || (collection && document.querySelector('main, [role="main"]'));
+    if (!feed) {
+        return;
+    }
+
+    const viewport = scrollTarget === document.scrollingElement ? {top: 0, bottom: window.innerHeight} : scrollTarget.getBoundingClientRect();
+    for (const button of Array.from(feed.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([aria-disabled="true"])'))) {
+        if (button.closest(`${outsidePosts}, ${cards}, ${bodies}, [role="dialog"]`)) {
+            continue;
+        }
+        const label = (button.getAttribute('aria-label') || button.textContent || '').trim();
+        if (!/^(load more(?: posts)?|show more posts|charger plus(?: de publications)?)$/i.test(label)) {
+            continue;
+        }
+        const bounds = button.getBoundingClientRect();
+        if (bounds.width && bounds.height && (bounds.bottom > viewport.top || atBottom) && bounds.top < viewport.bottom) {
+            return button;
+        }
+    }
+}
+
+export function scanPatreonPosts(): PatreonScan {
     const found = new Map<string, BookmarkMedia>();
     function add(url: URL | undefined, media: BookmarkMedia) {
         if (url && (!found.has(url.href) || found.get(url.href) === 'link')) {
@@ -106,23 +122,38 @@ export function scanPatreonPosts(): CollectedItem[] {
         }
     }
 
-    const roots = new Set(document.querySelectorAll<Element>(`${cards}, ${bodies}`));
-    if (!roots.size && /\/posts\/[^/]+/.test(location.pathname)) {
-        const main = document.querySelector('main, [role="main"]');
-        if (main) {
+    const main = document.querySelector('main, [role="main"]');
+    const roots = new Set(Array.from(document.querySelectorAll(`${cards}, ${bodies}`)).filter(root => !root.closest(outsidePosts)));
+    const postPath = /\/posts\/(?:[^/]+-)?(\d+)\/?$/;
+    const current = location.pathname.match(postPath)?.[1];
+    const postIds = new Set<string>();
+    if (current) {
+        postIds.add(current);
+        if (!roots.size && main) {
             roots.add(main);
         }
-    }
-
-    // Compact collection tiles sometimes expose only a linked cover and post permalink.
-    if (/\/collections?\//.test(location.pathname) || /[?&]collection(?:_id)?=/.test(location.search)) {
+    } else {
+        for (const root of roots) {
+            const id = root.getAttribute('data-post-id');
+            if (id && /^\d+$/.test(id)) {
+                postIds.add(id);
+            }
+        }
+        // Creator feeds and collections both use compact tiles. Their title or
+        // timestamp may be the only post identity and often sits in the card header.
         document.querySelectorAll<HTMLAnchorElement>(permalink).forEach(anchor => {
-            if (!anchor.closest(chrome) && !anchor.closest(cards)) {
-                roots.add(anchor);
-                const url = networkUrl(anchor.href);
-                if (url && isPatreonUrl(url.href)) {
-                    add(url, 'link');
-                }
+            if (anchor.closest(outsidePosts) || anchor.closest(bodies)) {
+                return;
+            }
+            const url = networkUrl(anchor.getAttribute('href'));
+            const id = url && isPatreonUrl(url.href) && url.pathname.match(postPath)?.[1];
+            if (!url || !id) {
+                return;
+            }
+            postIds.add(id);
+            add(url, 'link');
+            if (!anchor.closest(cards)) {
+                roots.add(anchor.closest('li, [role="listitem"]') || anchor);
             }
         });
     }
@@ -165,5 +196,8 @@ export function scanPatreonPosts(): CollectedItem[] {
             }
         }
     }
-    return Array.from(found, ([url, mediaType]) => ({url, mediaType}));
+    const firstPost = Array.from(roots).find(root => root.getClientRects().length);
+    const scrollTarget = scrollContainer(firstPost || main);
+    const items = Array.from(found, ([url, mediaType]) => ({url, mediaType}));
+    return {items, postIds, scrollTarget};
 }

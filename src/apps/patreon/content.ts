@@ -1,7 +1,7 @@
 import type {CollectedItem, BookmarkMedia} from '../../hooks/useCollections';
 import browser from 'webextension-polyfill';
-import {isPatreonUrl, scanPatreonPosts, visiblePostIds} from './scan';
-import {readPost} from './post';
+import {isPatreonUrl, nextPostsButton, scanPatreonPosts} from './scan';
+import {PostRateLimitError, readPost} from './post';
 
 // The port ties the capture to the requesting popup and tab, including pause and cancellation.
 type CaptureCommand = {action: 'pause' | 'resume' | 'start'; wait?: number};
@@ -14,18 +14,20 @@ export function initPatreonContent() {
         if (port.name !== 'patreon-collection') {
             return;
         }
-        const page = location.href;
+        const page = location.pathname + location.search;
         const seen = new Map<string, BookmarkMedia>();
         let timer: number | undefined;
         let wait = 3;
         let remaining = 0;
         let bottomSince = 0;
+        let pagedAtCount = -1;
 
         const visited = new Set<string>();
         const pending = new Set<string>();
         let request: AbortController | undefined;
         let reading = false;
-        let unavailable = false;
+        let missingDetails = false;
+        let rateLimited = false;
 
         function publish(batch: CollectedItem[]) {
             const items = batch.filter(item => {
@@ -43,7 +45,7 @@ export function initPatreonContent() {
         }
 
         async function readNextPost() {
-            if (reading || unavailable || !pending.size) {
+            if (reading || rateLimited || !pending.size) {
                 return;
             }
             const id = pending.values().next().value as string;
@@ -53,13 +55,15 @@ export function initPatreonContent() {
             const deadline = window.setTimeout(() => request?.abort(), 15000);
             try {
                 const items = await readPost(id, request.signal);
-                if (!request.signal.aborted && location.href === page) {
+                if (!request.signal.aborted && location.pathname + location.search === page) {
                     publish(items);
                 }
-            } catch {
-                // Keep collecting the rendered page if the post endpoint is unavailable.
-                unavailable = true;
-                pending.clear();
+            } catch (error) {
+                missingDetails = true;
+                if (error instanceof PostRateLimitError) {
+                    rateLimited = true;
+                    pending.clear();
+                }
             } finally {
                 window.clearTimeout(deadline);
                 request = undefined;
@@ -67,34 +71,47 @@ export function initPatreonContent() {
             }
         }
 
-        function tick() {
-            if (location.href !== page) {
+        function tick(resetPosition = false) {
+            if (location.pathname + location.search !== page) {
                 window.clearInterval(timer);
                 request?.abort();
                 port.disconnect();
                 return;
             }
-            publish(scanPatreonPosts());
-            if (!unavailable) {
-                for (const id of visiblePostIds()) {
-                    if (!visited.has(id)) {
-                        visited.add(id);
+            const {items, postIds, scrollTarget} = scanPatreonPosts();
+            publish(items);
+            for (const id of postIds) {
+                if (!visited.has(id)) {
+                    visited.add(id);
+                    bottomSince = 0;
+                    if (!rateLimited) {
                         pending.add(id);
                     }
                 }
-                void readNextPost();
             }
-            if (remaining === 0) {
-                const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
-                if (atBottom && !reading && !pending.size && bottomSince && Date.now() - bottomSince >= Math.max(3000, wait * 1000)) {
-                    port.postMessage({complete: true, count: seen.size, previewOnly: unavailable});
+            void readNextPost();
+            if (resetPosition) {
+                scrollTarget.scrollTo(0, 0);
+            }
+            if (remaining === 0 && !resetPosition) {
+                const atBottom = scrollTarget.scrollTop + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 2;
+                if (visited.size && visited.size !== pagedAtCount) {
+                    const next = nextPostsButton(scrollTarget, atBottom);
+                    if (next) {
+                        pagedAtCount = visited.size;
+                        bottomSince = 0;
+                        next.click();
+                    }
+                }
+                if (atBottom && !reading && !pending.size && bottomSince && Date.now() - bottomSince >= Math.max(8000, wait * 1000)) {
+                    port.postMessage({complete: true, count: seen.size, previewOnly: missingDetails});
                     window.clearInterval(timer);
                     return;
                 }
                 bottomSince = atBottom ? bottomSince || Date.now() : 0;
-                window.scrollBy(0, Math.max(1, Math.floor(window.innerHeight * 0.9)));
+                scrollTarget.scrollBy(0, Math.max(1, Math.floor(scrollTarget.clientHeight * 0.9)));
                 remaining = wait;
-            } else {
+            } else if (remaining > 0) {
                 remaining--;
             }
             port.postMessage({remaining});
@@ -104,15 +121,11 @@ export function initPatreonContent() {
             const message = raw as CaptureCommand;
             window.clearInterval(timer);
             if (message.action === 'start' || message.action === 'resume') {
-                if (message.action === 'start') {
-                    publish(scanPatreonPosts());
-                    window.scrollTo(0, 0);
-                }
                 wait = message.wait ?? wait;
                 bottomSince = 0;
                 remaining = 0;
                 timer = window.setInterval(tick, 1000);
-                tick();
+                tick(message.action === 'start');
             }
         });
         port.onDisconnect.addListener(() => {

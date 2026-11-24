@@ -33,6 +33,11 @@ jobs:
       - name: Build (production env)
         run: npm run build:prod
 
+      - name: Test Patreon scrolling in Chromium
+        run: |
+          npx playwright-core install --with-deps --no-shell chromium
+          node --test tests/patreon-scroll.test.mjs
+
       - name: Archive production build
         if: always()
         uses: actions/upload-artifact@v4

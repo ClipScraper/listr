@@ -25,6 +25,8 @@ type PostResponse = {
     included?: MediaResource[];
 };
 
+export class PostRateLimitError extends Error {}
+
 // Compact cards can omit most of a gallery and truncate the post body. Ask for
 // that post in the current tab's session before treating its preview as complete.
 export async function readPost(id: string, signal: AbortSignal): Promise<CollectedItem[]> {
@@ -35,6 +37,9 @@ export async function readPost(id: string, signal: AbortSignal): Promise<Collect
     const response = await fetch(endpoint, {signal, credentials: 'same-origin'});
     if ([403, 404].includes(response.status)) {
         return [];
+    }
+    if (response.status === 429) {
+        throw new PostRateLimitError();
     }
     if (!response.ok) {
         throw new Error(`Post request returned ${response.status}`);

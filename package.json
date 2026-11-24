@@ -9,7 +9,8 @@
     "start": "webpack --mode development --watch",
     "typecheck": "tsc --noEmit",
     "package": "./scripts/package.sh",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:patreon": "npm run build && node --test tests/patreon-scroll.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.477.0",
@@ -24,6 +25,7 @@
     "autoprefixer": "^10.4.20",
     "css-loader": "^7.1.2",
     "husky": "^9.1.7",
+    "playwright-core": "1.65.1",
     "postcss": "^8.4.49",
     "postcss-loader": "^8.1.1",
     "style-loader": "^4.0.0",

@@ -16,6 +16,8 @@ npm run build:test
 npm run build:prod
 ```
 
+To run the Patreon scrolling regression tests, install Chromium once with `npx playwright-core install --no-shell chromium`, then run `npm run test:patreon`. You can also set `CHROMIUM_PATH` to an existing Chromium executable.
+
 ## Load unpacked in Chrome
 
 1. Run `npm run build` to generate `dist/`.

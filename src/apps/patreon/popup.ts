@@ -48,7 +48,7 @@ export function usePatreonCapture(url: string, wait: number, saveItems: SaveItem
             }
             if (message.complete) {
                 const notice = message.count ? '' : 'No images, videos, or links found in the posts on this page.';
-                setNotice(message.previewOnly ? 'Post details were unavailable. Saved what was visible on the page.' : notice);
+                setNotice(message.previewOnly ? 'Some post details were unavailable. Visible items were saved.' : notice);
                 cancel();
             }
         });
