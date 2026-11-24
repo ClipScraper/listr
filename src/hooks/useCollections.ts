@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
 import browser from 'webextension-polyfill';
 
+export type BookmarkMedia = 'pictures' | 'video' | 'link';
+export type CollectedItem = {url: string; mediaType: BookmarkMedia};
+
+export type Platform = 'tiktok' | 'instagram' | 'youtube' | 'pinterest' | 'twitter' | 'other' | 'patreon';
+
 export interface Bookmark {
   uuid: string;
-  platform: 'tiktok' | 'instagram' | 'youtube' | 'pinterest' | 'twitter' | 'other';
+  mediaType?: BookmarkMedia;
+  platform: Platform;
   url: string;
   collection: string;
 }
 
 export interface CollectionMeta {
-  type: 'bookmarks' | 'profile' | 'favorites' | 'liked' | 'reposts' | 'recommendation' | 'video' | 'playlist' | 'thread';
+  type: 'bookmarks' | 'profile' | 'favorites' | 'liked' | 'reposts' | 'recommendation' | 'video' | 'playlist' | 'thread' | 'collection';
   handle: string; // collection name for bookmarks, username for profile
 }
 
@@ -53,39 +59,43 @@ export function useCollections() {
     return out as T;
   }
 
-  const addBookmarksToCollection = (platform: 'tiktok' | 'instagram' | 'youtube' | 'pinterest' | 'twitter' | 'other', collectionName: string, urls: string[]) => {
-    if (!urls || urls.length === 0) return;
-    setCollectionStore(prevStore => {
-      const platformMap = prevStore.collections[platform] || {};
-      const currentList = platformMap[collectionName] || [];
-      const existing = new Set(currentList.map(b => b.url));
-      const filtered = urls.filter(u => !existing.has(u));
-      if (filtered.length === 0) return prevStore;
+    const addBookmarksToCollection = (platform: Platform, collectionName: string, items: (string | CollectedItem)[], meta?: CollectionMeta) => {
+        if (!items.length) {
+            return;
+        }
+        setCollectionStore(prevStore => {
+            const platformMap = prevStore.collections[platform] || {};
+            const current = Object.prototype.hasOwnProperty.call(platformMap, collectionName) ? platformMap[collectionName] : [];
+            const bookmarks = new Map(current.map(bookmark => [bookmark.url, bookmark]));
+            let changed = false;
+            for (const item of items) {
+                const url = typeof item === 'string' ? item : item.url;
+                const mediaType = typeof item === 'string' ? undefined : item.mediaType;
+                const existing = bookmarks.get(url);
+                if (!existing) {
+                    bookmarks.set(url, {uuid: crypto.randomUUID(), platform, url, collection: collectionName, mediaType});
+                    changed = true;
+                } else if (mediaType && (!existing.mediaType || (existing.mediaType === 'link' && mediaType !== 'link'))) {
+                    bookmarks.set(url, {...existing, mediaType});
+                    changed = true;
+                }
+            }
+            if (!changed) {
+                return prevStore;
+            }
+            const next = Array.from(bookmarks.values());
+            const updatedPlatform = Object.prototype.hasOwnProperty.call(platformMap, collectionName)
+                ? {...platformMap, [collectionName]: next}
+                : {[collectionName]: next, ...platformMap};
+            const collections = {...prevStore.collections, [platform]: updatedPlatform};
+            const nextMeta = meta ? {...prevStore.meta, [platform]: {...prevStore.meta?.[platform], [collectionName]: meta}} : prevStore.meta;
+            const updatedStore = {collections, meta: nextMeta};
+            saveCollections(updatedStore);
+            return updatedStore;
+        });
+    };
 
-      const newBookmarks: Bookmark[] = filtered.map(url => ({
-        uuid: crypto.randomUUID(),
-        platform,
-        url,
-        collection: collectionName,
-      }));
-
-      let nextPlatformMap: typeof platformMap;
-      if (!platformMap[collectionName]) {
-        // New collection: place it at the top
-        nextPlatformMap = insertKeyFirst(platformMap, collectionName, newBookmarks);
-      } else {
-        // Existing collection: append items
-        nextPlatformMap = { ...platformMap, [collectionName]: [...currentList, ...newBookmarks] };
-      }
-
-      const updatedCollections = { ...prevStore.collections, [platform]: nextPlatformMap };
-      const updatedStore: CollectionStore = { collections: updatedCollections, meta: prevStore.meta };
-      saveCollections(updatedStore);
-      return updatedStore;
-    });
-  };
-
-  const ensureCollection = (platform: 'tiktok' | 'instagram' | 'youtube' | 'pinterest' | 'twitter' | 'other', collectionName: string, meta?: CollectionMeta) => {
+  const ensureCollection = (platform: Platform, collectionName: string, meta?: CollectionMeta) => {
     setCollectionStore(prevStore => {
       const platformCollections = prevStore.collections[platform] || {};
       const already = !!platformCollections[collectionName];
@@ -165,7 +175,7 @@ export function useCollections() {
         const meta = updatedMeta[platform][oldCollectionName];
         const platformMeta = { ...updatedMeta[platform] };
         delete platformMeta[oldCollectionName];
-        updatedMeta[platform] = insertKeyFirst(platformMeta, newCollectionName, meta);
+        updatedMeta[platform] = insertKeyFirst(platformMeta, newCollectionName, platform === 'patreon' ? {...meta, handle: newCollectionName} : meta);
       }
 
       const updatedStore: CollectionStore = { collections: updatedCollections, meta: updatedMeta };
@@ -179,7 +189,7 @@ export function useCollections() {
     return collectionStore.meta?.[platform]?.[collectionName];
   };
 
-  const getCollectionsByPlatform = (platform: 'tiktok' | 'instagram' | 'youtube' | 'pinterest' | 'twitter' | 'other') => {
+  const getCollectionsByPlatform = (platform: Platform) => {
     return collectionStore.collections[platform] || {};
   };
 

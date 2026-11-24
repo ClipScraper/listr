@@ -7,6 +7,9 @@ import { useScrolling } from './hooks/useScrolling';
 import { useSelectionMode } from './hooks/useSelectionMode';
 import { useCollections } from './hooks/useCollections';
 import './styles/popup.css';
+import {resolvePatreonAttachments} from './apps/patreon/attachments';
+import {isPatreonUrl, patreonCollectionName} from './apps/patreon/scan';
+import {usePatreonCapture} from './apps/patreon/popup';
 import {
   extractInstagramCollectionName,
   getInstagramPageTitle as igGetInstagramPageTitle,
@@ -105,6 +108,7 @@ const Popup: React.FC = () => {
   /** Twitter active collection ref */
   const twitterActiveCollectionRef = React.useRef<{ name: string; handle: string; isThread?: boolean } | null>(null);
 
+    const isPatreonDomain = isPatreonUrl(activeUrl);
   const isTikTokDomain = activeUrl.startsWith("https://www.tiktok.com");
   const isInstagramDomain = activeUrl.startsWith("https://www.instagram.com");
   const isYouTubeDomain = /^https:\/\/www\.youtube\./.test(activeUrl);
@@ -231,7 +235,14 @@ const Popup: React.FC = () => {
     }
   }, [isInstagramDomain, isTwitterDomain, onInstaCompleteCb, onTwitterCompleteCb]);
 
-  const { scrollStatus, timeRemaining, startScrolling, stopResumeScrolling, startInstagramScrolling, startYouTubeScrolling, cancelScrolling } = useScrolling(onScrollCompleteCb);
+    const scrolling = useScrolling(onScrollCompleteCb);
+    const {startScrolling, startInstagramScrolling, startYouTubeScrolling, cancelScrolling} = scrolling;
+    const patreon = usePatreonCapture(activeUrl, scrollWaitTime, (name, items) => {
+        addBookmarksToCollection('patreon', name, items, {type: 'collection', handle: name});
+    });
+    const scrollStatus = isPatreonDomain ? patreon.status : scrolling.scrollStatus;
+    const timeRemaining = isPatreonDomain ? patreon.remaining : scrolling.timeRemaining;
+    const stopResumeScrolling = isPatreonDomain ? patreon.toggle : scrolling.stopResumeScrolling;
 
   React.useEffect(() => {
     if (!isTikTokDomain) {
@@ -615,6 +626,10 @@ const Popup: React.FC = () => {
   }, [triggerPinterestCollection]);
 
   const handleCancelListing = () => {
+    if (isPatreonDomain) {
+        patreon.cancel();
+        return;
+    }
     cancelScrolling();
     tiktokActiveCollectionRef.current = null;
     pinterestActiveRef.current = null;
@@ -662,7 +677,7 @@ const Popup: React.FC = () => {
 
   // CSV helpers
   const escapeCsv = (value: string) => {
-    const needsQuotes = /[",\n]/.test(value);
+    const needsQuotes = /[",\r\n]/.test(value);
     const escaped = value.replace(/"/g, '""');
     return needsQuotes ? `"${escaped}"` : escaped;
   };
@@ -815,7 +830,7 @@ const Popup: React.FC = () => {
     }
   };
 
-  const downloadCollection = (platform: string, collectionName: string) => {
+  const downloadCollection = async (platform: string, collectionName: string) => {
     const collectionsByPlatform = collectionStore.collections[platform];
     if (!collectionsByPlatform) return;
 
@@ -825,8 +840,10 @@ const Popup: React.FC = () => {
       return;
     }
 
+    const resolved = await resolvePatreonAttachments(bookmarks);
     const meta = getCollectionMeta(platform, collectionName) || { type: 'profile', handle: collectionName } as any;
-    const filename = `${platform}.${collectionName}.data.${downloadFormat}`;
+    const fileLabel = platform === 'patreon' ? collectionName.replace(/[<>:"/\\|?*]/g, '_').slice(0, 140) : collectionName;
+    const filename = `${platform}.${fileLabel}.data.${downloadFormat}`;
     let blob: Blob;
 
     if (downloadFormat === 'json') {
@@ -836,15 +853,16 @@ const Popup: React.FC = () => {
         meta,
         items: bookmarks.map(bm => ({
           url: bm.url,
-          mediaType: inferMediaType(platform, bm.url),
+          downloadUrl: resolved.get(bm.url),
+          mediaType: bm.mediaType ?? inferMediaType(platform, bm.url),
         })),
       };
       blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: "application/json;charset=utf-8;" });
     } else {
       const header = ["Platform", "Type", "Handle", "Media", "link"];
       const rows = bookmarks.map(bm => {
-        const media = inferMediaType(platform, bm.url);
-        return [platform, meta.type, meta.handle, media, bm.url];
+        const media = bm.mediaType ?? inferMediaType(platform, bm.url);
+        return [platform, meta.type, meta.handle, media, resolved.get(bm.url) ?? bm.url];
       });
       const csvContent = [header, ...rows]
         .map(row => row.map(col => escapeCsv(String(col))).join(","))
@@ -860,7 +878,7 @@ const Popup: React.FC = () => {
     }).catch(err => console.error("Error downloading data:", err));
   };
 
-  const downloadAllCollections = () => {
+  const downloadAllCollections = async () => {
     const all = collectionStore.collections;
     const platforms = Object.keys(all);
     if (platforms.length === 0) {
@@ -868,6 +886,8 @@ const Popup: React.FC = () => {
       return;
     }
 
+    const bookmarks = Object.values(all.patreon || {}).flat();
+    const resolved = await resolvePatreonAttachments(bookmarks);
     const filename = `all-collections.data.${downloadFormat}`;
     let blob: Blob;
 
@@ -884,7 +904,8 @@ const Popup: React.FC = () => {
             meta,
             items: bookmarks.map(bm => ({
               url: bm.url,
-              mediaType: inferMediaType(platform, bm.url),
+              downloadUrl: resolved.get(bm.url),
+              mediaType: bm.mediaType ?? inferMediaType(platform, bm.url),
             })),
           });
         }
@@ -903,8 +924,8 @@ const Popup: React.FC = () => {
           const bookmarks = platformCollections[collectionName] || [];
           const meta = getCollectionMeta(platform, collectionName) || { type: 'profile', handle: collectionName } as any;
           for (const bm of bookmarks) {
-            const media = inferMediaType(platform, bm.url);
-            rows.push([platform, String(meta.type), String(meta.handle), media, bm.url]);
+            const media = bm.mediaType ?? inferMediaType(platform, bm.url);
+            rows.push([platform, String(meta.type), String(meta.handle), media, resolved.get(bm.url) ?? bm.url]);
           }
         }
       }
@@ -927,21 +948,22 @@ const Popup: React.FC = () => {
   };
 
   return (
-    <div className={isDarkMode ? "dark" : ""}>
-      <div className="popup-container">
-        <div className="top-row">
+    <div id="popup-theme" className={isDarkMode ? "dark" : ""}>
+      <div id="popup-container" className="popup-container">
+        <div id="popup-toolbar" className="top-row">
           {/* Platform indicator */}
-          {isInstagramDomain ? (<img src="assets/instagram.webp" alt="Instagram" width={20} height={20} />
-          ) : isTikTokDomain ? (<img src="assets/tiktok.webp" alt="TikTok" width={20} height={20} />
-          ) : isYouTubeDomain ? (<img src="assets/youtube.webp" alt="YouTube" width={20} height={20} />
-          ) : isPinterestDomain ? (<img src="assets/pinterest.png" alt="Pinterest" width={20} height={20} />
-          ) : isTwitterDomain ? (<img src="assets/x.com.png" alt="Twitter/X" width={20} height={20} />
+          {isPatreonDomain ? (<img id="popup-current-patreon" src="assets/patreon.png" alt="Patreon" width={20} height={20} />
+          ) : isInstagramDomain ? (<img id="popup-current-instagram" src="assets/instagram.webp" alt="Instagram" width={20} height={20} />
+          ) : isTikTokDomain ? (<img id="popup-current-tiktok" src="assets/tiktok.webp" alt="TikTok" width={20} height={20} />
+          ) : isYouTubeDomain ? (<img id="popup-current-youtube" src="assets/youtube.webp" alt="YouTube" width={20} height={20} />
+          ) : isPinterestDomain ? (<img id="popup-current-pinterest" src="assets/pinterest.png" alt="Pinterest" width={20} height={20} />
+          ) : isTwitterDomain ? (<img id="popup-current-twitter" src="assets/x.com.png" alt="Twitter/X" width={20} height={20} />
           ) : (<Ban size={20} />)}
-          <button onClick={toggleTheme} className="theme-toggle-button">
+          <button id="popup-toggle-theme" onClick={toggleTheme} className="theme-toggle-button">
             {isDarkMode ? <Sun /> : <Moon />}
           </button>
-          <button onClick={downloadAllCollections} className="theme-toggle-button"><Download /></button>
-          <button onClick={() => {
+          <button id="popup-export-all" onClick={downloadAllCollections} className="theme-toggle-button"><Download /></button>
+          <button id="popup-clear-all" onClick={() => {
             if (validateBeforeClear) {
               if (confirm("Are you sure you want to clear all saved collections?")) {
                 Object.keys(getAllCollections()).forEach(platform => {Object.keys(getAllCollections()[platform]).forEach(collectionName => {deleteCollection(platform, collectionName);});});
@@ -952,63 +974,63 @@ const Popup: React.FC = () => {
           }} className="theme-toggle-button" aria-label="Clear all collections">
             <Trash2 size={20} />
           </button>
-        <button onClick={() => setIsSettingsOpen(prev => !prev)} className="theme-toggle-button" aria-label="Open settings">
+        <button id="popup-toggle-settings" onClick={() => setIsSettingsOpen(prev => !prev)} className="theme-toggle-button" aria-label="Open settings">
           <Settings size={20} />
         </button>
 
-          {(isInstagramDomain || isTikTokDomain || isYouTubeDomain || isPinterestDomain || isTwitterDomain) && (
-            <div className="instagram-controls-section">
-              <h4>
-                {isInstagramDomain ? igGetInstagramPageTitle(activeUrl)
+          {(isPatreonDomain || isInstagramDomain || isTikTokDomain || isYouTubeDomain || isPinterestDomain || isTwitterDomain) && (
+            <div id="popup-page-controls" className="instagram-controls-section">
+              <h4 id="popup-page-title">
+                {isPatreonDomain ? patreonCollectionName(activeUrl)
+                  : isInstagramDomain ? igGetInstagramPageTitle(activeUrl)
                   : isTikTokDomain ? iGetTiktokPageTitle(activeUrl, tiktokSectionState)
                   : isYouTubeDomain ? youTubeTitle
                   : isPinterestDomain ? pinterestTitle
                   : isTwitterDomain ? getTwitterPageTitle(activeUrl)
                   : ''}
               </h4>
-              <div className="instagram-buttons-row">
-                {scrollStatus === 'idle' && isInstagramDomain && (<button onClick={handleInstagramScrollAndCollect} className="theme-toggle-button" style={{ transform: 'scaleX(-1)' }}><ListTodo size={20} /></button>)}
-                {scrollStatus === 'idle' && isTikTokDomain && (<button onClick={handleCollectTiktokFavorites} className="theme-toggle-button" title="Collect favorites"><ListTodo size={20} /></button>)}
+              <div id="popup-capture-actions" className="instagram-buttons-row">
+                {scrollStatus === 'idle' && isPatreonDomain && (
+                    <button id="popup-collect-patreon" onClick={patreon.start} className="theme-toggle-button" title="Collect Patreon images, videos, and links"><ListTodo size={20} /></button>
+                )}
+                {isPatreonDomain && patreon.notice && <span id="popup-patreon-capture-status" role="status">{patreon.notice}</span>}
+                {scrollStatus === 'idle' && isInstagramDomain && (<button id="popup-collect-instagram" onClick={handleInstagramScrollAndCollect} className="theme-toggle-button" style={{ transform: 'scaleX(-1)' }}><ListTodo size={20} /></button>)}
+                {scrollStatus === 'idle' && isTikTokDomain && (<button id="popup-collect-tiktok" onClick={handleCollectTiktokFavorites} className="theme-toggle-button" title="Collect favorites"><ListTodo size={20} /></button>)}
                 {scrollStatus === 'idle' && isPinterestDomain && (
-                  <button onClick={handleCollectPinterestPins} className="theme-toggle-button" title="List pins on this page">
+                  <button id="popup-collect-pinterest" onClick={handleCollectPinterestPins} className="theme-toggle-button" title="List pins on this page">
                     <ListTodo size={20} />
                   </button>
                 )}
                 {scrollStatus === 'idle' && isPinterestBoardPage && (
-                  <button
-                    onClick={handleCollectPinterestMoreIdeas}
-                    className="theme-toggle-button"
-                    style={{ marginLeft: 'auto' }}
-                    title='List pins from "Find more ideas"'
-                  >
+                  <button id="popup-collect-pinterest-ideas" onClick={handleCollectPinterestMoreIdeas} className="theme-toggle-button" style={{ marginLeft: 'auto' }} title='List pins from "Find more ideas"'>
                     <Lightbulb size={20} />
                   </button>
                 )}
                 {scrollStatus === 'idle' && isYouTubeDomain && !isYouTubeVideoPage && !isYouTubeChannelPage && !isYouTubePlaylistPage && (
-                  <button onClick={handleYouTubeListVideos} className="theme-toggle-button" title="List videos on this page">
+                  <button id="popup-collect-youtube-page" onClick={handleYouTubeListVideos} className="theme-toggle-button" title="List videos on this page">
                     <ListTodo size={20} />
                   </button>
                 )}
                 {scrollStatus === 'idle' && (isYouTubeChannelPage || isYouTubePlaylistPage) && (
-                  <button onClick={handleYouTubeListVideos} className="theme-toggle-button" title="List all videos">
+                  <button id="popup-collect-youtube-channel" onClick={handleYouTubeListVideos} className="theme-toggle-button" title="List all videos">
                     <ListTodo size={20} />
                   </button>
                 )}
                 {scrollStatus === 'idle' && isYouTubeVideoPage && (
-                  <button onClick={handleYouTubeAddVideo} className="theme-toggle-button" title="Add this video to collections"><Plus size={20} /></button>)}
+                  <button id="popup-add-youtube-video" onClick={handleYouTubeAddVideo} className="theme-toggle-button" title="Add this video to collections"><Plus size={20} /></button>)}
                 {scrollStatus === 'idle' && isTwitterDomain && (
                   <>
-                    <button onClick={handleTwitterScrollAndCollect} className="theme-toggle-button" title="Download tweets"><ListTodo size={20} /></button>
+                    <button id="popup-collect-twitter" onClick={handleTwitterScrollAndCollect} className="theme-toggle-button" title="Download tweets"><ListTodo size={20} /></button>
                     {isTwitterThread && (
-                      <button onClick={handleTwitterThreadDownload} className="theme-toggle-button" title="Download thread"><MessageSquare size={20} /></button>
+                      <button id="popup-collect-thread" onClick={handleTwitterThreadDownload} className="theme-toggle-button" title="Download thread"><MessageSquare size={20} /></button>
                     )}
                   </>
                 )}
                 {scrollStatus !== 'idle' && (
                   <>
-                    <button onClick={stopResumeScrolling} className="theme-toggle-button">{scrollStatus === 'scrolling' ? <Pause size={20} /> : <Play size={20} />}</button>
-                    <div className="scroll-timer" style={{ marginBottom: 0 }}>Time until next scroll: {timeRemaining} seconds</div>
-                    <button onClick={handleCancelListing} className="cancel-square-button" title="Cancel listing" style={{marginLeft: 'auto'}} aria-label="Cancel listing" />
+                    <button id="popup-toggle-capture" onClick={stopResumeScrolling} className="theme-toggle-button">{scrollStatus === 'scrolling' ? <Pause size={20} /> : <Play size={20} />}</button>
+                    <div id="popup-scroll-countdown" className="scroll-timer" style={{ marginBottom: 0 }}>Time until next scroll: {timeRemaining} seconds</div>
+                    <button id="popup-stop-capture" onClick={handleCancelListing} className="cancel-square-button" title="Cancel listing" style={{marginLeft: 'auto'}} aria-label="Cancel listing" />
                   </>
                 )}
               </div>
@@ -1017,125 +1039,112 @@ const Popup: React.FC = () => {
 
           {isSelecting && (
             <>
-              <button onClick={validateSelection} className="btn">Validate</button>
-              <button onClick={cancelSelection} className="btn">Cancel</button>
+              <button id="popup-save-selection" onClick={validateSelection} className="btn">Validate</button>
+              <button id="popup-cancel-selection" onClick={cancelSelection} className="btn">Cancel</button>
             </>
           )}
         </div>
 
         {/* Collections or Settings */}
         {isSettingsOpen ? (
-          <div className="settings-section">
-            <h3>Settings</h3>
-            <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label htmlFor="validate-clear" style={{ flex: '0 0 75%', flexShrink: 0 }}>Validate before clearing list</label>
-              <div style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
-                <input
-                  id="validate-clear"
-                  className="setting-checkbox"
-                  type="checkbox"
-                  checked={validateBeforeClear}
-                  onChange={(e) => handleSetValidateBeforeClear(e.target.checked)}
-                />
+          <div id="popup-settings" className="settings-section">
+            <h3 id="popup-settings-title">Settings</h3>
+            <div id="popup-validate-clear-setting" className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label id="popup-validate-clear-label" htmlFor="validate-clear" style={{ flex: '0 0 75%', flexShrink: 0 }}>Validate before clearing list</label>
+              <div id="popup-validate-clear-control" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
+                <input id="validate-clear" className="setting-checkbox" type="checkbox" checked={validateBeforeClear} onChange={(e) => handleSetValidateBeforeClear(e.target.checked)} />
               </div>
             </div>
-            <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label htmlFor="scroll-wait" style={{ flex: '0 0 75%', flexShrink: 0 }}>Scroll interval time</label>
-              <div style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
+            <div id="popup-scroll-wait-setting" className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label id="popup-scroll-wait-label" htmlFor="scroll-wait" style={{ flex: '0 0 75%', flexShrink: 0 }}>Scroll interval time</label>
+              <div id="popup-scroll-wait-control" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
                 <input id="scroll-wait" className="setting-input" type="number" value={scrollWaitTime} onChange={(e) => handleSetScrollWaitTime(e.target.value)} style={{ maxWidth: '70px' }} />
               </div>
             </div>
-            <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label htmlFor="download-format" style={{ flex: '0 0 75%', flexShrink: 0 }}>Download format</label>
-              <div style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
-                <select
-                  id="download-format"
-                  className="setting-input"
-                  value={downloadFormat}
-                  onChange={(e) => handleSetDownloadFormat(e.target.value)}
-                  style={{ maxWidth: '70px', width: '70px' }}
-                >
-                  <option value="csv">CSV</option>
-                  <option value="json">JSON</option>
+            <div id="popup-download-format-setting" className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label id="popup-download-format-label" htmlFor="download-format" style={{ flex: '0 0 75%', flexShrink: 0 }}>Download format</label>
+              <div id="popup-download-format-control" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
+                <select id="download-format" className="setting-input" value={downloadFormat} onChange={(e) => handleSetDownloadFormat(e.target.value)} style={{ maxWidth: '70px', width: '70px' }}>
+                  <option id="popup-format-csv" value="csv">CSV</option>
+                  <option id="popup-format-json" value="json">JSON</option>
                 </select>
               </div>
             </div>
             {isTwitterDomain && (
-              <div className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <label htmlFor="twitter-author-only" style={{ flex: '0 0 75%', flexShrink: 0 }}>Thread: author's tweets only</label>
-                <div style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
-                  <input
-                    id="twitter-author-only"
-                    className="setting-checkbox"
-                    type="checkbox"
-                    checked={twitterThreadAuthorOnly}
-                    onChange={(e) => handleSetTwitterThreadAuthorOnly(e.target.checked)}
-                  />
+              <div id="popup-twitter-author-only-setting" className="setting-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label id="popup-twitter-author-only-label" htmlFor="twitter-author-only" style={{ flex: '0 0 75%', flexShrink: 0 }}>Thread: author's tweets only</label>
+                <div id="popup-twitter-author-only-control" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'flex-end', paddingRight: '5px' }}>
+                  <input id="twitter-author-only" className="setting-checkbox" type="checkbox" checked={twitterThreadAuthorOnly} onChange={(e) => handleSetTwitterThreadAuthorOnly(e.target.checked)} />
                 </div>
               </div>
             )}
           </div>
         ) : (
-          <div className="collections-table-section">
-            <h3>Saved Collections</h3>
-            <table>
-              <thead>
-                <tr>
-                  <th>Platform</th>
-                  <th>Type</th>
-                  <th>Handle</th>
-                  <th>Items</th>
-                  <th>Action</th>
+          <div id="popup-collections" className="collections-table-section">
+            <h3 id="popup-collections-title">Saved Collections</h3>
+            <table id="popup-collections-table">
+              <thead id="popup-collections-head">
+                <tr id="popup-collections-columns">
+                  <th id="popup-collections-platform-heading">Platform</th>
+                  <th id="popup-collections-type-heading">Type</th>
+                  <th id="popup-collections-handle-heading">Handle</th>
+                  <th id="popup-collections-items-heading">Items</th>
+                  <th id="popup-collections-action-heading">Action</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody id="popup-collections-body">
                 {Object.keys(getAllCollections()).length === 0 && !youTubeErrorMessage && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', fontSize: '0.85rem', opacity: 0.7 }}>No collections yet</td>
+                  <tr id="popup-empty-collections-row">
+                    <td id="popup-empty-collections-message" colSpan={5} style={{ textAlign: 'center', fontSize: '0.85rem', opacity: 0.7 }}>No collections yet</td>
                   </tr>
                 )}
                 {youTubeErrorMessage && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', fontSize: '0.85rem', color: '#ff6b6b', padding: '1rem' }}>
+                  <tr id="popup-youtube-error-row">
+                    <td id="popup-youtube-error-message" colSpan={5} style={{ textAlign: 'center', fontSize: '0.85rem', color: '#ff6b6b', padding: '1rem' }}>
                       {youTubeErrorMessage}
                     </td>
                   </tr>
                 )}
                 {Object.entries(getAllCollections()).map(([platform, platformCollections]) => (
-                  Object.entries(platformCollections).map(([colName, bookmarks]) => (
-                    <tr key={`${platform}-${colName}`}>
-                      <td>
-                        {platform === 'instagram' && <img src="assets/instagram.webp" alt="Instagram" width={20} height={20} />}
-                        {platform === 'tiktok'    && <img src="assets/tiktok.webp" alt="TikTok" width={20} height={20} />}
-                        {platform === 'youtube'   && <img src="assets/youtube.webp" alt="YouTube" width={20} height={20} />}
-                        {platform === 'pinterest' && <img src="assets/pinterest.png" alt="Pinterest" width={20} height={20} />}
-                        {platform === 'twitter'   && <img src="assets/x.com.png" alt="Twitter/X" width={20} height={20} />}
-                        {platform === 'other'     && <Ban size={20} />}
-                      </td>
-                      <td>{getCollectionMeta(platform, colName)?.type || 'profile'}</td>
-                      <td>
-                        {editingCollection?.platform === platform && editingCollection?.collectionName === colName ? (
-                          <input type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={handleEditKeyPress} onBlur={saveCollectionEdit} className="collection-edit-input" autoFocus style={{width: '100%', fontSize: '0.85rem'}} />
-                        ) : (
-                          <span
-                            onClick={() => startEditingCollection(platform, colName)}
-                            style={{cursor: 'pointer', userSelect: 'none', padding: '0.25rem', borderRadius: '4px', transition: 'background-color 0.2s'}}
-                            title="Click to edit collection name"
-                            onMouseEnter={(e) => {e.currentTarget.style.backgroundColor = isDarkMode ? '#4a5568' : '#f0f0f0'}}
-                            onMouseLeave={(e) => {e.currentTarget.style.backgroundColor = 'transparent'}}>
-                            {getCollectionMeta(platform, colName)?.handle || colName}
-                          </span>
-                        )}
-                      </td>
-                      <td>{bookmarks.length}</td>
-                      <td>
-                        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', justifyContent: 'center' }}>
-                          <button onClick={() => deleteCollection(platform, colName)} className="theme-toggle-button" aria-label="Delete collection"><Trash2 size={18} /></button>
-                          <button onClick={() => downloadCollection(platform, colName)} className="theme-toggle-button" aria-label="Download data CSV"><Download size={18} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  Object.entries(platformCollections).map(([colName, bookmarks]) => {
+                    const nameId = Array.from(colName, ch => ch.codePointAt(0)!.toString(16)).join('-');
+                    const rowId = `popup-collection-${platform}-${nameId}`;
+                    return (
+                        <tr id={`${rowId}-row`} key={`${platform}-${colName}`}>
+                          <td id={`${rowId}-platform`}>
+                            {platform === 'patreon' && <img id={`${rowId}-platform-icon`} src="assets/patreon.png" alt="Patreon" width={20} height={20} />}
+                            {platform === 'instagram' && <img id={`${rowId}-platform-icon`} src="assets/instagram.webp" alt="Instagram" width={20} height={20} />}
+                            {platform === 'tiktok'    && <img id={`${rowId}-platform-icon`} src="assets/tiktok.webp" alt="TikTok" width={20} height={20} />}
+                            {platform === 'youtube'   && <img id={`${rowId}-platform-icon`} src="assets/youtube.webp" alt="YouTube" width={20} height={20} />}
+                            {platform === 'pinterest' && <img id={`${rowId}-platform-icon`} src="assets/pinterest.png" alt="Pinterest" width={20} height={20} />}
+                            {platform === 'twitter'   && <img id={`${rowId}-platform-icon`} src="assets/x.com.png" alt="Twitter/X" width={20} height={20} />}
+                            {platform === 'other'     && <Ban size={20} />}
+                          </td>
+                          <td id={`${rowId}-type`}>{getCollectionMeta(platform, colName)?.type || 'profile'}</td>
+                          <td id={`${rowId}-handle`}>
+                            {editingCollection?.platform === platform && editingCollection?.collectionName === colName ? (
+                              <input id={`${rowId}-rename`} type="text" value={editingValue} onChange={(e) => setEditingValue(e.target.value)} onKeyDown={handleEditKeyPress} onBlur={saveCollectionEdit} className="collection-edit-input" autoFocus style={{width: '100%', fontSize: '0.85rem'}} />
+                            ) : (
+                              <span id={`${rowId}-name`}
+                                onClick={() => startEditingCollection(platform, colName)}
+                                style={{cursor: 'pointer', userSelect: 'none', padding: '0.25rem', borderRadius: '4px', transition: 'background-color 0.2s'}}
+                                title="Click to edit collection name"
+                                onMouseEnter={(e) => {e.currentTarget.style.backgroundColor = isDarkMode ? '#4a5568' : '#f0f0f0'}}
+                                onMouseLeave={(e) => {e.currentTarget.style.backgroundColor = 'transparent'}}>
+                                {getCollectionMeta(platform, colName)?.handle || colName}
+                              </span>
+                            )}
+                          </td>
+                          <td id={`${rowId}-count`}>{bookmarks.length}</td>
+                          <td id={`${rowId}-actions-cell`}>
+                            <div id={`${rowId}-actions`} style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', justifyContent: 'center' }}>
+                              <button id={`${rowId}-delete`} onClick={() => deleteCollection(platform, colName)} className="theme-toggle-button" aria-label="Delete collection"><Trash2 size={18} /></button>
+                              <button id={`${rowId}-export`} onClick={() => downloadCollection(platform, colName)} className="theme-toggle-button" aria-label="Download data CSV"><Download size={18} /></button>
+                            </div>
+                          </td>
+                        </tr>
+                    );
+                  })
                 ))}
               </tbody>
             </table>
