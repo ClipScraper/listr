@@ -319,3 +319,5 @@ body {
   border-color: #63b3ed !important;
   box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.2);
 }
+
+.collection-creator { display: block; font-size: 0.8em; }
