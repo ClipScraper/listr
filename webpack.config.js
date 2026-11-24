@@ -26,7 +26,7 @@ module.exports = {
       {
         test: /\.css$/,
         use: [
-          'style-loader',
+          { loader: 'style-loader', options: { attributes: { id: 'popup-styles' } } },
           'css-loader',
           {
             loader: 'postcss-loader',

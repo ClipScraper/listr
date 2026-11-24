@@ -1,3 +1,4 @@
+import {initPatreonContent} from './apps/patreon/content';
 import browser from 'webextension-polyfill';
 import { initYouTubeContent } from './apps/youtube/content';
 import { initPinterestContent } from './apps/pinterest/content';
@@ -714,3 +715,5 @@ browser.runtime.onMessage.addListener(async (message: any, _sender: any) => {
 try { initYouTubeContent(); } catch {}
 try { initPinterestContent(); } catch {}
 try { initTwitterContent(); } catch {}
+
+initPatreonContent();
